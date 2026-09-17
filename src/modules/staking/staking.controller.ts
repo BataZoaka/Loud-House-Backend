@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '@/common/decorators/public.decorator';
 import { AuthenticatedUser, CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -38,6 +38,8 @@ export class StakingController {
    * anyone drain anyone else's vault by editing a URL.
    */
   @Post('unstake/:stakeId')
+  // 200, not Nest's default 201: withdrawing creates no new resource.
+  @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Withdraw a matured lock and collect its tickets' })
   unstake(@CurrentUser() user: AuthenticatedUser, @Param('stakeId') stakeId: string) {

@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '@/common/decorators/public.decorator';
 import { AuthenticatedUser, CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -81,6 +91,8 @@ export class RafflesController {
   }
 
   @Post(':id/draw')
+  // 200: the draw updates the raffle, it does not create a resource.
+  @HttpCode(HttpStatus.OK)
   @UseGuards(AdminGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Run the draw and reveal the seed' })

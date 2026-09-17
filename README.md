@@ -191,6 +191,12 @@ world.
 
 ## Endpoints
 
+> **Integrating a frontend?** [**API.md**](./API.md) is the full guide: every
+> endpoint with a tested `curl` command and its real response, the error shapes,
+> the sign-in flow with wagmi, and a script that walks the whole
+> stake → earn → enter loop end to end.
+
+
 ### Auth — wallet sign-in
 
 | Method | Path | Notes |

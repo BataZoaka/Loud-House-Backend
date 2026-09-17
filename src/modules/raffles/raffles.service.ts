@@ -448,6 +448,9 @@ export class RafflesService {
   }
 
   private truncateAddress(address: string): string {
-    return `${address.slice(0, 5)}…${address.slice(-3)}`.toUpperCase();
+    // "0x71A…F6F" — matching the designs. The 0x prefix stays lowercase; only
+    // the hex is uppercased. Uppercasing the whole string gives "0X71A…F6F",
+    // which reads as a typo.
+    return `0x${address.slice(2, 5).toUpperCase()}…${address.slice(-3).toUpperCase()}`;
   }
 }
