@@ -34,19 +34,58 @@ Three consequences run through the whole codebase:
 
 ### 1. Get a Postgres
 
-Pick whichever is least annoying for you:
+**Recommended — Docker Compose.** A `docker-compose.yml` is in the repo:
 
 ```bash
-# Docker — easiest if you have it
+docker compose up -d --wait
+```
+
+`--wait` matters: the container accepts connections a moment before Postgres is
+actually ready, so without it a `migrate deploy` run immediately afterwards can
+fail. The compose file defines a healthcheck, and `--wait` blocks until it passes.
+
+Then in your `.env`:
+
+```
+DATABASE_URL=postgresql://loudhouse:loudhouse@localhost:5432/loudhouse?schema=public
+```
+
+Managing it:
+
+```bash
+docker compose down        # stop, keep the data
+docker compose down -v     # stop and wipe the data (fresh start)
+docker compose logs -f db  # tail the database log
+```
+
+The data lives in a named volume, so it survives `down` and restarts. Use
+`down -v` when you want to start clean, then re-run migrate and seed.
+
+**Port 5432 already taken?** If you have Postgres installed locally, change the
+*left* number in `docker-compose.yml` (e.g. `'5433:5432'`) and match it in
+`DATABASE_URL`.
+
+**One-off container instead of compose**, if you prefer:
+
+```bash
 docker run --name loudhouse-db -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=loudhouse -p 5432:5432 -d postgres:16
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/loudhouse?schema=public
 ```
+
+Add `--rm` to that command if you want the container to delete itself on stop.
+
+**Other options:**
 
 - **macOS without Docker:** [Postgres.app](https://postgresapp.com), then
   `createdb loudhouse`.
-- **No local install at all:** create a free database on
-  [Neon](https://neon.tech) or [Supabase](https://supabase.com) and paste the
-  connection string they give you into `DATABASE_URL` below. Nothing else changes.
+- **Nothing local at all:** create a free database on [Neon](https://neon.tech)
+  or [Supabase](https://supabase.com) and paste their connection string into
+  `DATABASE_URL`. Nothing else changes.
+
+> Note: `?schema=public` is a Prisma-specific parameter. Prisma understands it;
+> plain `psql` will reject the URL with *"invalid URI query parameter"*. Drop
+> that suffix when connecting with `psql` by hand.
 
 ### 2. Configure
 

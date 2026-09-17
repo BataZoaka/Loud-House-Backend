@@ -1,0 +1,37 @@
+# Throwaway Postgres for local development.
+#
+#   docker compose up -d      start it
+#   docker compose down       stop it (data survives)
+#   docker compose down -v    stop it and delete the data
+#
+# Then in .env:
+#   DATABASE_URL=postgresql://loudhouse:loudhouse@localhost:5432/loudhouse?schema=public
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: loudhouse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: loudhouse
+      POSTGRES_PASSWORD: loudhouse
+      POSTGRES_DB: loudhouse
+    ports:
+      # Host 5432 -> container 5432. If you already run Postgres locally this
+      # will collide; change the LEFT number (e.g. "5433:5432") and update the
+      # port in DATABASE_URL to match.
+      - '5432:5432'
+    volumes:
+      - loudhouse-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # `npx prisma migrate deploy` immediately after `up -d` will fail without
+      # this — the container accepts connections a moment before Postgres is
+      # actually ready. With it, `docker compose up -d --wait` blocks until the
+      # database genuinely answers queries.
+      test: ['CMD-SHELL', 'pg_isready -U loudhouse -d loudhouse']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  loudhouse-db-data:
