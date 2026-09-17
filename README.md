@@ -308,6 +308,29 @@ Prisma object: a `select` you forget to narrow ships the secret.
 
 ---
 
+## Chain
+
+The Loud House targets **Robinhood Chain**, an EVM L2 — so the ERC-721 reads are
+identical to Ethereum's and only the chain config and RPC differ.
+
+| | Chain ID | RPC | Explorer |
+| --- | --- | --- | --- |
+| Mainnet | `4663` | `https://rpc.mainnet.chain.robinhood.com` | [robinhoodchain.blockscout.com](https://robinhoodchain.blockscout.com) |
+| Testnet | `46630` | `https://rpc.testnet.chain.robinhood.com` | [explorer.testnet.chain.robinhood.com](https://explorer.testnet.chain.robinhood.com) |
+
+Both ship in viem (`robinhood`, `robinhoodTestnet`), so there is no custom chain
+definition to maintain.
+
+An **unrecognised `CHAIN_ID` is a fatal boot error**, not a fallback. It used to
+default to Ethereum mainnet, which is the worst way to fail: a typo would point
+ownership checks at the wrong network, `ownerOf()` would return nothing useful,
+and every stake would be rejected with "you do not own this tenant" and no
+explanation in the logs.
+
+Note that **OpenSea does not index Robinhood Chain**. If the collection lives on
+4663 there is no OpenSea data to sync, and floor price / listings would have to
+come from a marketplace that supports the chain.
+
 ## `DEMO_MODE`
 
 With `DEMO_MODE=true`, `OwnershipService` **skips on-chain ownership checks** —

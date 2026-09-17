@@ -1,7 +1,15 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Chain, PublicClient, createPublicClient, http, parseAbi } from 'viem';
-import { arbitrum, base, mainnet, polygon, sepolia } from 'viem/chains';
+import {
+  arbitrum,
+  base,
+  mainnet,
+  polygon,
+  robinhood,
+  robinhoodTestnet,
+  sepolia,
+} from 'viem/chains';
 
 /** The two ERC-721 reads we need. No need for the full ABI. */
 const ERC721_ABI = parseAbi([
@@ -9,7 +17,14 @@ const ERC721_ABI = parseAbi([
   'function balanceOf(address owner) view returns (uint256)',
 ]);
 
+/**
+ * Chains this backend can talk to. The Loud House runs on Robinhood Chain
+ * (4663) — an EVM L2, so the ERC-721 reads below are identical to Ethereum's;
+ * only the chain config and RPC differ.
+ */
 const CHAINS: Record<number, Chain> = {
+  4663: robinhood,
+  46630: robinhoodTestnet,
   1: mainnet,
   137: polygon,
   8453: base,
@@ -49,10 +64,27 @@ export class OwnershipService {
       return;
     }
 
+    const chain = CHAINS[chainId];
+    if (!chain) {
+      // Deliberately fatal. This used to fall back to Ethereum mainnet, which
+      // is the worst possible behaviour: a typo in CHAIN_ID would point
+      // ownership checks at the wrong network entirely, ownerOf() would revert
+      // or return a stranger's address for every token, and every stake would
+      // be refused with "you do not own this tenant" — with nothing in the
+      // logs to explain why. Failing at boot costs seconds; failing silently
+      // costs a day of debugging.
+      throw new Error(
+        `CHAIN_ID ${chainId} is not configured. Known chains: ${Object.keys(CHAINS).join(', ')}. ` +
+          `Add it to CHAINS in ownership.service.ts if this is intentional.`,
+      );
+    }
+
     this.client = createPublicClient({
-      chain: CHAINS[chainId] ?? mainnet,
+      chain,
       transport: http(rpcUrl),
     });
+
+    this.logger.log(`Chain: ${chain.name} (${chain.id})`);
   }
 
   /**
