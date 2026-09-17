@@ -148,6 +148,9 @@ npx prisma migrate dev --name whatever   # after changing schema.prisma
 
 | Symptom | Cause |
 | --- | --- |
+| `P1000: Authentication failed ... credentials for \`postgres\` are not valid` | The user in `DATABASE_URL` does not match the one your database was created with. The compose file creates **`loudhouse`**, not `postgres` — so the URL must be `postgresql://loudhouse:loudhouse@localhost:5432/loudhouse?schema=public`. |
+| `P1000` even though the user looks right | `POSTGRES_USER` / `POSTGRES_PASSWORD` are only applied when the data directory is **first initialised**. If the volume already exists from an earlier container with different credentials, changing them in compose does nothing. Wipe and recreate: `docker compose down -v && docker compose up -d --wait`. |
+| `P1000`, and you also have Postgres installed natively | Your container may have failed to bind port 5432, leaving you talking to the *native* server, which has different credentials. Check with `docker compose ps` and `lsof -i :5432`. |
 | `Can't reach database server at localhost:5432` | Postgres is not running, or `DATABASE_URL` is wrong. Check with `psql "$DATABASE_URL" -c 'select 1'`. |
 | `JWT_SECRET must be at least 32 characters` | Working as intended. Run `openssl rand -base64 48`. |
 | `Environment variable not found: DATABASE_URL` | No `.env` — you skipped `cp .env.example .env`. |
