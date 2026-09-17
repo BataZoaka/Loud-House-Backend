@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -134,6 +135,24 @@ export class RafflesService {
       throw new BadRequestException('This raffle has closed');
     }
 
+    // The holder half of "HOLDERS WITH 1+ TICKET". Deliberately checked BEFORE
+    // opening the transaction: it is a network round-trip to the RPC, and
+    // holding the raffle row lock (which serialises every entry to this raffle)
+    // across a call that can take hundreds of milliseconds would throttle the
+    // whole raffle to the speed of our RPC provider.
+    //
+    // Tickets alone would not be enough here. They are earned once and stay in
+    // the ledger, so a wallet that staked, collected, then sold every tenant
+    // would otherwise keep entering draws forever.
+    if (raffle.holdersOnly) {
+      const holdsAny = await this.ownership.assertHoldsAny(walletAddress);
+      if (!holdsAny) {
+        throw new ForbiddenException(
+          'You need to hold at least one tenant to enter. Tickets earned earlier do not count once the tenants are sold.',
+        );
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // Take the raffle row lock FIRST, before touching anything else.
       //
@@ -239,6 +258,7 @@ export class RafflesService {
         prizeNftId,
         entryCost: dto.entryCost ?? 1,
         minTicketsToEnter: dto.minTicketsToEnter ?? 1,
+        holdersOnly: dto.holdersOnly ?? true,
         maxEntriesPerUser: dto.maxEntriesPerUser,
         opensAt,
         closesAt,
@@ -398,7 +418,10 @@ export class RafflesService {
       prize: raffle.prizeNft ?? { label: raffle.prizeLabel, imageUrl: raffle.prizeImageUrl },
       entryCost: raffle.entryCost,
       minTicketsToEnter: raffle.minTicketsToEnter,
-      eligibilityLabel: `HOLDERS WITH ${raffle.minTicketsToEnter}+ TICKET`,
+      holdersOnly: raffle.holdersOnly,
+      eligibilityLabel: raffle.holdersOnly
+        ? `HOLDERS WITH ${raffle.minTicketsToEnter}+ TICKET`
+        : `${raffle.minTicketsToEnter}+ TICKET`,
       maxEntriesPerUser: raffle.maxEntriesPerUser,
       entryCount: raffle.entryCount,
       opensAt: raffle.opensAt,

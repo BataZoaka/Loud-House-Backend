@@ -285,7 +285,37 @@ only one live lock per tenant is possible.
 attempts the insert and catches Prisma's `P2002`. A pre-check loses the race;
 the constraint cannot.
 
-### 3. Draws are provably fair
+### 3. Raffle entry needs BOTH a tenant and a ticket
+
+The design card says **"HOLDERS WITH 1+ TICKET"**, and both halves are enforced
+at the moment of entry:
+
+1. **You must currently hold at least one tenant** (`balanceOf > 0` on-chain).
+2. **You must have tickets**, which only come from completed stakes.
+
+The second without the first is a hole, and not an obvious one. Tickets are
+earned once and stay in the ledger forever, so a wallet could stake, collect
+its tickets, **sell every tenant**, and keep entering draws indefinitely.
+Checking holding only at stake time does not catch it either, because the sale
+happens afterwards. It has to be re-checked on every entry —
+`OwnershipService.assertHoldsAny`.
+
+Staking does not move the NFT (there is no contract transaction), so a staked
+tenant still counts toward `balanceOf`. Locking a tenant never costs a holder
+their eligibility.
+
+The check is deliberately made **before** the transaction opens: it is an RPC
+round-trip, and holding the raffle row lock across it would throttle every
+entry to the speed of our RPC provider.
+
+`Raffle.holdersOnly` defaults to `true`. Set it `false` only for a raffle
+deliberately open to non-holders.
+
+Like staking, this **fails closed** — if the chain is unreachable the entry is
+rejected rather than accepted unverified, because a ticket burned on a 1/1 draw
+is not cleanly reversible.
+
+### 4. Draws are provably fair
 
 Real 1/1 prizes decided by a server we control. "Trust us" is not good enough,
 and it is not necessary:
@@ -365,7 +395,7 @@ back.
 - [ ] **Snapshot module** — the `SNAPSHOT` nav item; models exist, no service yet.
 - [ ] **Content endpoints** — artists and team for the landing page; the
       `Person` model is seeded but has no controller.
-- [ ] **Tests** — `DrawService` has 12 unit tests. Still wanted: an automated
+- [ ] **Tests** — 25 unit tests across `DrawService` and `OwnershipService`. Still wanted: an automated
       concurrency test for the ledger (currently verified by hand, see below)
       and controller-level e2e tests.
 
@@ -386,6 +416,7 @@ Run against a real Postgres, not mocks:
 | Unstaking after maturity | tickets credited |
 | Replaying the unstake | 400, balance unchanged (not double-credited) |
 | **5 simultaneous raffle entries on a 1-ticket balance** | **1 accepted, 4 rejected, balance 0 — never negative** |
+| Raffle entry holding 5 tickets but no verifiable tenants | 503 — rejected, fails closed |
 | `serverSeed` before the draw | `null` in every response |
 | Drawing before entries close | 400 |
 | Recomputing the draw independently of the server | matches |

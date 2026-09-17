@@ -56,14 +56,9 @@ export class OwnershipService {
     const chainId = this.config.getOrThrow<number>('chain.chainId');
     const rpcUrl = this.config.get<string>('chain.rpcUrl');
 
-    if (!rpcUrl) {
-      // Not fatal in demo mode, but we log loudly so it is obvious in the
-      // boot output why ownership checks are not happening.
-      this.logger.warn('RPC_URL is not set — on-chain ownership checks are disabled');
-      this.client = null;
-      return;
-    }
-
+    // Validate the chain BEFORE the RPC early-return below, so a bad CHAIN_ID
+    // is caught at boot even while running without an RPC. Otherwise the typo
+    // hides until the day someone sets RPC_URL and turns demo mode off.
     const chain = CHAINS[chainId];
     if (!chain) {
       // Deliberately fatal. This used to fall back to Ethereum mainnet, which
@@ -77,6 +72,14 @@ export class OwnershipService {
         `CHAIN_ID ${chainId} is not configured. Known chains: ${Object.keys(CHAINS).join(', ')}. ` +
           `Add it to CHAINS in ownership.service.ts if this is intentional.`,
       );
+    }
+
+    if (!rpcUrl) {
+      // Not fatal in demo mode, but logged loudly so it is obvious from the
+      // boot output why ownership checks are not happening.
+      this.logger.warn('RPC_URL is not set — on-chain ownership checks are disabled');
+      this.client = null;
+      return;
     }
 
     this.client = createPublicClient({
@@ -143,6 +146,44 @@ export class OwnershipService {
     }
 
     return owner === walletAddress.toLowerCase();
+  }
+
+  /**
+   * Asserts the wallet currently holds at least one tenant.
+   *
+   * This is the gate on raffle entry. Tickets alone are not enough: they are
+   * earned once and then sit in the ledger forever, so without this check a
+   * wallet could stake, collect tickets, sell every tenant it owns, and keep
+   * entering draws indefinitely. The designs say "HOLDERS WITH 1+ TICKET" —
+   * holder AND tickets, both checked at the moment of entry.
+   *
+   * Staking does not move the NFT (there is no contract transaction), so a
+   * staked tenant still counts toward balanceOf. Locking a tenant therefore
+   * never costs a holder their eligibility.
+   *
+   * Fails closed, like assertOwns: if we cannot reach the chain we reject the
+   * entry rather than let an unverified one through and burn a ticket on it.
+   */
+  async assertHoldsAny(walletAddress: string): Promise<boolean> {
+    if (this.demoMode) {
+      this.logger.debug(`DEMO_MODE: skipping holder check for ${walletAddress}`);
+      return true;
+    }
+
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'Holder verification is unavailable — RPC_URL is not configured',
+      );
+    }
+
+    const balance = await this.balanceOf(walletAddress);
+    if (balance === null) {
+      throw new ServiceUnavailableException(
+        'Could not verify your tenants on-chain. Please try again shortly.',
+      );
+    }
+
+    return balance > 0;
   }
 
   /** How many tenants a wallet holds, straight from the contract. */

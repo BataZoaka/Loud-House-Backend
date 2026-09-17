@@ -301,9 +301,16 @@ model Raffle {
   status RaffleStatus @default(SCHEDULED)
 
   /// Tickets burned per entry.
-  entryCost         Int  @default(1)
+  entryCost         Int     @default(1)
   /// Minimum ticket balance required to enter at all.
-  minTicketsToEnter Int  @default(1)
+  minTicketsToEnter Int     @default(1)
+  /// Whether the entrant must currently hold at least one tenant.
+  ///
+  /// Defaults to true, which is the rule the designs describe: "HOLDERS WITH
+  /// 1+ TICKET". Tickets alone are not enough, because they persist in the
+  /// ledger after a holder sells out — see OwnershipService.assertHoldsAny.
+  /// Set false only for a raffle deliberately open to non-holders.
+  holdersOnly       Boolean @default(true)
   /// Cap per wallet. Null = unlimited.
   maxEntriesPerUser Int?
 

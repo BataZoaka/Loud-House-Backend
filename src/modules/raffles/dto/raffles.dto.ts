@@ -1,6 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDateString, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsDateString,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class CreateRaffleDto {
   @ApiProperty({ example: 'tenant-0103-camo-stalk' })
@@ -42,6 +50,15 @@ export class CreateRaffleDto {
   @IsInt()
   @Min(0)
   minTicketsToEnter?: number;
+
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Require the entrant to currently hold a tenant. Leave true unless the raffle is deliberately open to non-holders.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  holdersOnly?: boolean;
 
   @ApiPropertyOptional({ description: 'Cap per wallet. Omit for unlimited.' })
   @IsOptional()
