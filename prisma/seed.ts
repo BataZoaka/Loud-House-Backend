@@ -8,6 +8,13 @@
  *
  *   npx prisma migrate dev && npm run db:seed
  */
+// Load .env explicitly. Prisma Client does auto-load a .env relative to the
+// schema path baked in at generate time, which USUALLY finds this project's
+// file — but it is implicit, and it resolves against the generated client
+// rather than the working directory. A seed run from an unexpected cwd, or
+// against a node_modules shared with another checkout, then silently reads the
+// wrong .env or none at all. One explicit line removes the ambiguity.
+import 'dotenv/config';
 import {
   PersonKind,
   PrismaClient,

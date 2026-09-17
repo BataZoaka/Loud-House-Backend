@@ -28,30 +28,99 @@ Three consequences run through the whole codebase:
 
 ---
 
-## Running it
+## Running it locally
+
+**You need:** Node 20+ (built on 22) and a PostgreSQL 14+ database.
+
+### 1. Get a Postgres
+
+Pick whichever is least annoying for you:
 
 ```bash
-cp .env.example .env          # then edit DATABASE_URL and JWT_SECRET
-npm install
-npx prisma migrate dev        # create the schema
-npm run db:seed               # tenants, a demo holder, an open raffle
-npm run start:dev
-```
-
-- API: `http://localhost:4000/api`
-- Swagger: `http://localhost:4000/api/docs`
-
-Need a Postgres quickly:
-
-```bash
+# Docker — easiest if you have it
 docker run --name loudhouse-db -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=loudhouse -p 5432:5432 -d postgres:16
 ```
 
-Generate a real `JWT_SECRET` with `openssl rand -base64 48`. The app refuses to
-boot with a short one — see `src/config/env.validation.ts`.
+- **macOS without Docker:** [Postgres.app](https://postgresapp.com), then
+  `createdb loudhouse`.
+- **No local install at all:** create a free database on
+  [Neon](https://neon.tech) or [Supabase](https://supabase.com) and paste the
+  connection string they give you into `DATABASE_URL` below. Nothing else changes.
 
----
+### 2. Configure
+
+```bash
+cp .env.example .env
+```
+
+Two values must be set before the app will start:
+
+| Variable | What to put |
+| --- | --- |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/loudhouse?schema=public` for the Docker command above, or the string your host gave you |
+| `JWT_SECRET` | 32+ characters. Generate one: `openssl rand -base64 48` |
+
+The app **refuses to boot** if `JWT_SECRET` is missing or too short, rather than
+signing tokens with an empty string. That is deliberate — see
+`src/config/env.validation.ts`.
+
+### 3. Install, migrate, seed, run
+
+```bash
+npm install
+npx prisma migrate deploy   # create the tables
+npm run db:seed             # 120 tenants, a demo holder, an open raffle
+npm run start:dev           # watch mode
+```
+
+You should see:
+
+```
+The Loud House API listening on http://localhost:4000/api
+DEMO_MODE is ON — on-chain ownership checks are bypassed. Do not ship this.
+```
+
+### 4. Check it works
+
+```bash
+curl http://localhost:4000/api/collection/stats
+# {"totalSupply":120,"uniqueHolders":2,"stakedCount":0}
+```
+
+Then open **http://localhost:4000/api/docs** — Swagger lists every endpoint and
+lets you call them from the browser. Click **Authorize** and paste a token from
+`POST /api/auth/verify` to try the authenticated routes.
+
+The seed makes `0x71af6f0e1b2c3d4e5f60718293a4b5c6d7e8f900` an **admin**, so you
+can hit the operator endpoints (create a raffle, run a draw) while developing.
+
+### Useful commands
+
+```bash
+npm run start:dev      # watch mode
+npm test               # unit tests
+npm run prisma:studio  # browse the database in a GUI
+npm run db:seed        # re-seed (safe to re-run, everything upserts)
+npx prisma migrate dev --name whatever   # after changing schema.prisma
+```
+
+### If something goes wrong
+
+| Symptom | Cause |
+| --- | --- |
+| `Can't reach database server at localhost:5432` | Postgres is not running, or `DATABASE_URL` is wrong. Check with `psql "$DATABASE_URL" -c 'select 1'`. |
+| `JWT_SECRET must be at least 32 characters` | Working as intended. Run `openssl rand -base64 48`. |
+| `Environment variable not found: DATABASE_URL` | No `.env` — you skipped `cp .env.example .env`. |
+| Wrong port, or data from a database you did not expect | Something already set those variables in your shell or another `.env` reachable from this project. Node config layers do not override variables already present in `process.env`. Check with `env \| grep -E 'PORT\|DATABASE_URL'`. |
+| Changed `schema.prisma`, types did not update | Run `npx prisma generate` (or `npx prisma migrate dev`, which does both). |
+
+### Connecting your Next.js frontend
+
+Point the frontend at `http://localhost:4000/api` and make sure its origin is in
+`CORS_ORIGINS` (defaults to `http://localhost:3000`). The API uses bearer
+tokens, so store the JWT from `/auth/verify` and send it as
+`Authorization: Bearer <token>`.
 
 ## Layout
 
