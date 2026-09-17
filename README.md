@@ -327,9 +327,11 @@ ownership checks at the wrong network, `ownerOf()` would return nothing useful,
 and every stake would be rejected with "you do not own this tenant" and no
 explanation in the logs.
 
-Note that **OpenSea does not index Robinhood Chain**. If the collection lives on
-4663 there is no OpenSea data to sync, and floor price / listings would have to
-come from a marketplace that supports the chain.
+The collection itself is deployed on 4663, so **ownership is read from Robinhood
+Chain**. Note that OpenSea does not index this chain — there is no OpenSea API
+to sync from regardless of where the collection is listed elsewhere. The
+explorer for 4663 is Blockscout, whose public REST API is what the indexer
+should read holders and token metadata from (`BLOCKSCOUT_API_URL`).
 
 ## `DEMO_MODE`
 
@@ -349,10 +351,17 @@ back.
 
 ## Still to build
 
-- [ ] **Indexer** — sync `ownerAddress` from Transfer events; the catalogue and
-      vault both read it, and right now only the seed populates it.
-- [ ] **OpenSea integration** — floor price and listings, server-side so the API
-      key never reaches the browser.
+- [ ] **Indexer — the biggest remaining gap.** `ownerAddress` is only populated
+      by the seed right now, and both the catalogue and the staking vault read
+      it, so with real data they would show nothing. It needs to backfill token
+      metadata and current owners, then follow `Transfer` events to stay
+      current. Two viable sources on 4663: Blockscout's REST API
+      (`/v2/tokens/{contract}/holders` and `/instances`), or `getLogs` against
+      the RPC directly. Until this exists, `DEMO_MODE` cannot be turned off
+      usefully — there are no real holders to verify against.
+- [ ] **Marketplace data** — no OpenSea API exists for this chain, so floor
+      price and listings need a marketplace that supports 4663, or the
+      transfer history from Blockscout. Not blocking anything in the designs.
 - [ ] **Snapshot module** — the `SNAPSHOT` nav item; models exist, no service yet.
 - [ ] **Content endpoints** — artists and team for the landing page; the
       `Person` model is seeded but has no controller.

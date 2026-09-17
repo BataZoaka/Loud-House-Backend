@@ -14,7 +14,7 @@ export interface AppConfig {
   jwt: { secret: string; expiresIn: string };
   siwe: { domain: string; uri: string; statement: string };
   chain: { chainId: number; rpcUrl: string; nftContractAddress: string };
-  opensea: { apiKey: string; collectionSlug: string };
+  indexer: { blockscoutApiUrl: string };
 }
 
 const toBool = (value: string | undefined, fallback: boolean): boolean => {
@@ -44,8 +44,9 @@ export default (): AppConfig => ({
     rpcUrl: process.env.RPC_URL ?? '',
     nftContractAddress: (process.env.NFT_CONTRACT_ADDRESS ?? '').toLowerCase(),
   },
-  opensea: {
-    apiKey: process.env.OPENSEA_API_KEY ?? '',
-    collectionSlug: process.env.OPENSEA_COLLECTION_SLUG ?? '',
+  indexer: {
+    // Blockscout, not OpenSea: OpenSea does not index Robinhood Chain, so
+    // there is no marketplace API to read this collection from.
+    blockscoutApiUrl: process.env.BLOCKSCOUT_API_URL ?? '',
   },
 });
