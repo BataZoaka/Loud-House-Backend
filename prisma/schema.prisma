@@ -1,0 +1,456 @@
+// The Loud House — data model
+//
+// Design note: staking and raffles are OFF-CHAIN (per the designs: "no wallet
+// signature or contract transaction"). That means this database IS the source
+// of truth — there is no contract to reconcile against if we get it wrong.
+// Two rules follow from that, and they shape the whole schema:
+//
+//   1. Balances are never stored as a mutable integer. Tickets live in an
+//      append-only ledger and the balance is the SUM of it. See TicketLedger.
+//   2. Anything that must happen at most once is enforced by a UNIQUE
+//      constraint in the database, not by an `if` in a service. Application
+//      checks lose races; unique indexes do not.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Collection — the 3,000 tenants
+// ---------------------------------------------------------------------------
+
+model Nft {
+  id          String  @id @default(cuid())
+  /// On-chain token id. Int is fine for a 3,000 piece collection; use String
+  /// if you ever index a collection with very large token ids.
+  tokenId     Int     @unique
+  name        String
+  /// "LOUD HEADS" etc. — the sub-collection label shown under each card.
+  editionName String?
+  description String?
+
+  imageUrl     String
+  thumbnailUrl String?
+  animationUrl String?
+
+  /// Denormalised copy of the BACKGROUND trait. The catalogue filters on it
+  /// constantly, so it gets its own indexed column rather than a join.
+  background String?
+
+  /// Full metadata blob exactly as served at tokenURI, kept verbatim so we can
+  /// re-derive traits without re-fetching from IPFS.
+  metadata Json?
+
+  /// Lowercased owner address, refreshed by the indexer. Nullable because a
+  /// row can exist before we have first synced ownership.
+  ownerAddress String?
+
+  /// Rarity is computed, not authored. rarityScore is the raw sum of trait
+  /// weights; rarityRank is its position (1 = rarest).
+  rarityScore Float?
+  rarityRank  Int?
+
+  traits   NftTrait[]
+  stakes   Stake[]
+  /// Raffles in which this NFT is the prize.
+  prizeFor Raffle[]   @relation("RafflePrize")
+
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([ownerAddress])
+  @@index([background])
+  @@index([rarityRank])
+  @@map("nfts")
+}
+
+/// One row per trait VALUE (e.g. "Background / Pink"), shared by every NFT that
+/// carries it. Lets us compute rarity and build the filter dropdown with a
+/// count query instead of scanning every metadata blob.
+model Trait {
+  id        String @id @default(cuid())
+  traitType String
+  value     String
+
+  /// How many NFTs carry this trait. Denormalised for the filter UI.
+  count  Int    @default(0)
+  /// count / totalSupply, cached so the gallery can render "2.4%".
+  rarity Float?
+
+  nfts NftTrait[]
+
+  @@unique([traitType, value])
+  @@index([traitType])
+  @@map("traits")
+}
+
+model NftTrait {
+  nftId   String
+  traitId String
+
+  nft   Nft   @relation(fields: [nftId], references: [id], onDelete: Cascade)
+  trait Trait @relation(fields: [traitId], references: [id], onDelete: Cascade)
+
+  @@id([nftId, traitId])
+  @@index([traitId])
+  @@map("nft_traits")
+}
+
+// ---------------------------------------------------------------------------
+// Users & wallet auth
+// ---------------------------------------------------------------------------
+
+model User {
+  id String @id @default(cuid())
+
+  /// ALWAYS lowercased before write. Addresses are case-insensitive in
+  /// practice but EIP-55 checksums differ by case, so storing mixed case means
+  /// the same wallet can register twice and split its ticket balance.
+  walletAddress String @unique
+
+  /// Random value the wallet signs during Sign-In-With-Ethereum. Rotated on
+  /// every successful login so a captured signature cannot be replayed.
+  nonce          String
+  nonceExpiresAt DateTime?
+
+  displayName String?
+  avatarUrl   String?
+
+  isAdmin  Boolean @default(false)
+  isBanned Boolean @default(false)
+
+  stakes       Stake[]
+  ticketLedger TicketLedger[]
+  entries      RaffleEntry[]
+  wonRaffles   Raffle[]       @relation("RaffleWinner")
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Staking vault
+// ---------------------------------------------------------------------------
+
+/// The five lock tiers from the design. Kept as an enum so an invalid duration
+/// is rejected at the edge of the system, and the reward for each tier lives in
+/// config (src/config/staking.config.ts) rather than being hardcoded here.
+enum StakeDuration {
+  DAYS_7
+  DAYS_14
+  DAYS_30
+  DAYS_60
+  DAYS_90
+}
+
+enum StakeStatus {
+  /// Locked in the vault. Whether the UI shows LOCKED or UNLOCKED is derived
+  /// from endsAt vs now — NOT stored. See the note below.
+  ACTIVE
+  /// Unstaked by the holder; tickets have been credited.
+  WITHDRAWN
+  /// Voided by an admin, or because ownership verification failed on exit.
+  /// No tickets credited.
+  CANCELLED
+}
+
+/// Note on states: the designs show a LOCKED badge and an UNLOCKED badge, but
+/// "unlocked" is just ACTIVE with endsAt in the past. We deliberately do not
+/// store that as a separate status — if we did, we would need a cron job
+/// flipping rows every minute and the UI would be wrong between runs. Derive
+/// time-based state at read time; it is always correct and needs no scheduler.
+model Stake {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nftId String
+  nft   Nft    @relation(fields: [nftId], references: [id])
+
+  duration StakeDuration
+  status   StakeStatus   @default(ACTIVE)
+
+  /// Snapshotted at stake time, on purpose. If you later change the reward
+  /// table, locks already in progress keep the deal they were offered.
+  ticketsEarned Int
+
+  startsAt    DateTime  @default(now())
+  endsAt      DateTime
+  withdrawnAt DateTime?
+
+  /// The owner address proven at stake time. Re-checked on withdrawal: if the
+  /// holder sold the tenant mid-lock, they do not get to keep farming it.
+  ownerAddressAtStake String
+
+  /// Set to nftId while this stake is ACTIVE, and nulled on withdrawal.
+  ///
+  /// This is what makes double-staking impossible. Postgres treats every NULL
+  /// in a unique index as distinct, so any number of finished stakes can sit
+  /// here as NULL, but only ONE row per NFT may hold a non-null value at a
+  /// time. The database rejects the second concurrent stake on the same tenant
+  /// even if both requests land in the same millisecond — which an
+  /// `if (existingStake) throw` in the service would not.
+  ///
+  /// (The alternative is a partial index, `UNIQUE (nft_id) WHERE status =
+  /// 'ACTIVE'`, which is tidier SQL but invisible here because Prisma cannot
+  /// express it — you would have to hand-edit every migration. This keeps the
+  /// rule where the model is.)
+  activeNftId String? @unique
+
+  ledgerEntry TicketLedger?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([endsAt])
+  @@map("stakes")
+}
+
+// ---------------------------------------------------------------------------
+// Tickets — the club currency
+// ---------------------------------------------------------------------------
+
+enum TicketReason {
+  /// Credit: a matured stake was withdrawn.
+  STAKE_REWARD
+  /// Debit: spent entering a raffle.
+  RAFFLE_ENTRY
+  /// Credit: raffle cancelled, entry refunded.
+  RAFFLE_REFUND
+  /// Either direction: manual correction by an admin. Always give a note.
+  ADMIN_ADJUSTMENT
+}
+
+/// Append-only. Never UPDATE or DELETE a row here — to reverse something, write
+/// an opposing row. Balance is SUM(delta) for the user.
+///
+/// Why not a `ticketBalance Int` column on User? Because two concurrent raffle
+/// entries would both read balance=1, both pass the check, and both write
+/// balance=0 — the user spends one ticket twice. A ledger plus the unique
+/// constraints below makes that arithmetically impossible.
+model TicketLedger {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Positive credits, negative debits.
+  delta  Int
+  reason TicketReason
+  note   String?
+
+  /// One credit per stake, ever. Unique, so a replayed or double-submitted
+  /// unstake request cannot mint a second reward.
+  stakeId String? @unique
+  stake   Stake?  @relation(fields: [stakeId], references: [id])
+
+  /// One debit per raffle entry, ever.
+  raffleEntryId String?      @unique
+  raffleEntry   RaffleEntry? @relation(fields: [raffleEntryId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("ticket_ledger")
+}
+
+// ---------------------------------------------------------------------------
+// The Raffle House
+// ---------------------------------------------------------------------------
+
+enum RaffleStatus {
+  /// Created, seed committed, not yet accepting entries.
+  SCHEDULED
+  /// Accepting entries.
+  OPEN
+  /// Entries closed, winner not yet drawn.
+  CLOSED
+  /// Winner selected and seed revealed.
+  DRAWN
+  /// Called off; entries refunded.
+  CANCELLED
+}
+
+model Raffle {
+  id          String  @id @default(cuid())
+  /// URL-friendly id for the frontend, e.g. "tenant-0103-camo-stalk".
+  slug        String  @unique
+  title       String
+  /// "THE LOUD HOUSE / GENESIS DOLLS" — the line under the prize name.
+  subtitle    String?
+  description String?
+
+  /// The tenant being given away.
+  prizeNftId    String?
+  prizeNft      Nft?    @relation("RafflePrize", fields: [prizeNftId], references: [id])
+  /// Fallback for prizes that are not NFTs in our own collection.
+  prizeLabel    String?
+  prizeImageUrl String?
+
+  status RaffleStatus @default(SCHEDULED)
+
+  /// Tickets burned per entry.
+  entryCost         Int  @default(1)
+  /// Minimum ticket balance required to enter at all.
+  minTicketsToEnter Int  @default(1)
+  /// Cap per wallet. Null = unlimited.
+  maxEntriesPerUser Int?
+
+  opensAt  DateTime
+  closesAt DateTime
+  drawnAt  DateTime?
+
+  /// Denormalised entry count so the card can show "1,204" without a
+  /// COUNT(*) on every page load. Maintained inside the entry transaction.
+  entryCount Int @default(0)
+
+  // --- Provable fairness (commit-reveal) --------------------------------
+  //
+  // The operator must not be able to look at the entries and then pick a
+  // winner. So: at creation we generate a random serverSeed, store it, and
+  // publish ONLY its hash. Entrants can record that hash. After the draw we
+  // reveal the seed; anyone can hash it and confirm it matches what was
+  // published before entries opened. The seed was therefore fixed in advance
+  // and could not have been chosen to favour anyone.
+  //
+  // serverSeed stays null in API responses until drawnAt is set. Selecting it
+  // early would defeat the entire scheme — see RafflesService.toPublicDto.
+
+  /// sha256(serverSeed), published at creation.
+  serverSeedHash     String
+  /// Revealed only after the draw.
+  serverSeed         String?
+  /// Optional extra entropy the operator cannot predict at commit time: the
+  /// hash of an Ethereum block mined after entries closed. Stops seed-grinding.
+  entropyBlockNumber BigInt?
+  entropyBlockHash   String?
+  /// The final combined hash the winning index was derived from. Published so
+  /// the draw can be recomputed by hand.
+  drawHash           String?
+
+  winningEntryId String?      @unique
+  winningEntry   RaffleEntry? @relation("WinningEntry", fields: [winningEntryId], references: [id])
+
+  winnerUserId String?
+  winner       User?   @relation("RaffleWinner", fields: [winnerUserId], references: [id])
+
+  entries RaffleEntry[] @relation("RaffleEntries")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, closesAt])
+  @@map("raffles")
+}
+
+/// One row per ticket spent. The "TICKET STRIP" on the raffle page is just the
+/// most recent rows of this table, and entryNumber is the "#001104" printed on
+/// each stub.
+model RaffleEntry {
+  id String @id @default(cuid())
+
+  /// Globally sequential across all raffles — matches the designs, where
+  /// #001104 and #001103 sit next to each other on the strip and a past raffle
+  /// records "WINNING TICKET #001132". Assigned from a Postgres sequence, so
+  /// it is gapless and race-free without us locking anything.
+  entryNumber Int @unique @default(autoincrement())
+
+  raffleId String
+  raffle   Raffle @relation("RaffleEntries", fields: [raffleId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Denormalised for the public strip, which shows a truncated address
+  /// without needing a join.
+  walletAddress String
+
+  ledgerEntry TicketLedger?
+  wonRaffle   Raffle?       @relation("WinningEntry")
+
+  createdAt DateTime @default(now())
+
+  @@index([raffleId, createdAt])
+  @@index([userId, raffleId])
+  @@map("raffle_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Holder snapshots (the SNAPSHOT nav item)
+// ---------------------------------------------------------------------------
+
+model Snapshot {
+  id          String   @id @default(cuid())
+  label       String
+  /// Block the ownership set was read at, so the snapshot is reproducible.
+  blockNumber BigInt?
+  takenAt     DateTime @default(now())
+
+  totalHolders Int @default(0)
+  totalSupply  Int @default(0)
+
+  holdings SnapshotHolding[]
+
+  @@map("snapshots")
+}
+
+model SnapshotHolding {
+  id String @id @default(cuid())
+
+  snapshotId String
+  snapshot   Snapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  walletAddress String
+  balance       Int
+  /// Token ids held at snapshot time.
+  tokenIds      Int[]
+
+  @@unique([snapshotId, walletAddress])
+  @@index([walletAddress])
+  @@map("snapshot_holdings")
+}
+
+// ---------------------------------------------------------------------------
+// Site content — the artists and team sections on the landing page
+// ---------------------------------------------------------------------------
+
+enum PersonKind {
+  /// "THE ARTISTS" — Mako, Vela, Oku.
+  ARTIST
+  /// "THE HUMANS BEHIND THE TENANTS" — Rin, Baz.
+  TEAM
+}
+
+model Person {
+  id       String     @id @default(cuid())
+  slug     String     @unique
+  name     String
+  kind     PersonKind
+  role     String?
+  bio      String?
+  imageUrl String?
+
+  /// Free-form links: { "x": "...", "instagram": "..." }.
+  links Json?
+
+  /// Manual ordering for the landing page.
+  sortOrder Int     @default(0)
+  isVisible Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kind, sortOrder])
+  @@map("people")
+}
